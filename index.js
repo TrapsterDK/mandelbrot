@@ -1,3 +1,58 @@
+// prettier-ignore
+const VERTCIES = [
+    1, 1, 1, -1, -1, 1,
+    -1, -1, 1, -1, -1, 1
+];
+const DIMENSION_COUNT = 2;
+const MIN_ITER = 50;
+const MAX_ITER = 1500;
+const SCROLL_MULTIPLIER = 0.1;
+
+const VERTEX_SHADER = `
+attribute vec2 aVertexPosition;
+
+varying vec2 vPos;
+
+void main() {
+    gl_Position = vec4(aVertexPosition, 0.0, 1.0);
+    vPos = aVertexPosition;
+}
+`;
+
+const FRAGMENT_SHADER = `
+precision highp float;
+varying highp vec2 vPos;
+uniform highp vec2 pos;
+uniform highp float zoom;
+uniform int iterLimit;
+const int maxIter = ${MAX_ITER};
+
+int mandelbrot() {
+    highp float x0 = vPos.x * zoom + pos.x;
+    highp float y0 = vPos.y * zoom + pos.y;
+    highp float x = 0.0;
+    highp float y = 0.0;
+    highp float x2 = 0.0;
+    highp float y2 = 0.0;
+
+    for (int i = 0; i < maxIter; i++) {
+        if (x * x + y * y > 4.0|| i >= iterLimit) return i;
+        y = 2.0 * x * y + y0;
+        x = x2 - y2 + x0;
+        x2 = x * x;
+        y2 = y * y;
+    }
+
+    return maxIter;
+}
+
+void main() {
+    int iter = mandelbrot();
+    highp float color = float(iter) / float(iterLimit);
+    gl_FragColor = vec4(color, color, color, 1.0);
+}
+`;
+
 function loadShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -10,11 +65,17 @@ function loadShader(gl, type, source) {
     return shader;
 }
 
-function createProgram(gl, vertexShader, fragmentShader) {
+function createProgram(gl, vertexShaderSource, fragmentShaderSource) {
+    const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+    if (!vertexShader) return null;
+    const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+    if (!fragmentShader) return null;
+
     const program = gl.createProgram();
     gl.attachShader(program, vertexShader);
     gl.attachShader(program, fragmentShader);
     gl.linkProgram(program);
+
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         console.error('Unable to initialize the shader program: ' + gl.getProgramInfoLog(program));
         return null;
@@ -22,13 +83,63 @@ function createProgram(gl, vertexShader, fragmentShader) {
     return program;
 }
 
-function createShaderProgram(gl, vertexShaderSource, fragmentShaderSource) {
-    const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-    const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
-    if (!vertexShader || !fragmentShader) {
-        return null;
+function attachCanvasEventListeners(canvas, zoom, pos) {
+    canvas.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        let multiplier = 1 + (0 < event.deltaY ? SCROLL_MULTIPLIER : -SCROLL_MULTIPLIER);
+        zoom.set(zoom.get()[0] * multiplier);
+    });
+
+    // drag to pan
+    let isDragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    canvas.addEventListener('mousedown', (event) => {
+        isDragging = true;
+        lastX = event.clientX;
+        lastY = event.clientY;
+    });
+
+    canvas.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+
+    canvas.addEventListener('mousemove', (event) => {
+        if (isDragging) {
+            let dx = event.clientX - lastX;
+            let dy = event.clientY - lastY;
+            lastX = event.clientX;
+            lastY = event.clientY;
+            let [x, y] = pos.get();
+            pos.set(x - (dx / canvas.width) * zoom.get()[0], y + (dy / canvas.height) * zoom.get()[0]);
+        }
+    });
+}
+
+function render(gl) {
+    gl.drawArrays(gl.TRIANGLES, 0, VERTCIES.length / DIMENSION_COUNT);
+}
+
+class UniformValue {
+    constructor(gl, program, name, fn_set = null) {
+        this.gl = gl;
+        this.fn_set = fn_set;
+        this.location = gl.getUniformLocation(program, name);
+
+        if (this.location === null || gl.getError() !== gl.NO_ERROR) {
+            throw new Error(`An error occurred getting the location of the uniform ${name}`);
+        }
     }
-    return createProgram(gl, vertexShader, fragmentShader);
+
+    set(...values) {
+        this.values = values;
+        this.fn_set.apply(this.gl, [this.location, ...values]);
+        render(this.gl);
+    }
+
+    get() {
+        return this.values;
+    }
 }
 
 function main() {
@@ -48,47 +159,7 @@ function main() {
         return;
     }
 
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
-    const vertexShaderSource = `
-        attribute vec2 aVertexPosition;
-        varying vec2 vPos;
-
-        void main() {
-            gl_Position = vec4(aVertexPosition, 0.0, 1.0);
-            vPos = aVertexPosition;
-        }
-    `;
-
-    const fragmentShaderSource = `
-        varying highp vec2 vPos;
-        const int maxIter = 50;
-
-        int mandelbrot() {
-            highp float x = 0.0;
-            highp float y = 0.0;
-            highp float x2 = 0.0;
-            highp float y2 = 0.0;
-
-            for (int i = 0; i < maxIter; i++) {
-                if (x * x + y * y > 4.0) return i;
-                y = 2.0 * x * y + vPos.y;
-                x = x2 - y2 + vPos.x;
-                x2 = x * x;
-                y2 = y * y;
-            }
-            return maxIter;
-        }
-
-        void main() {
-            int iter = mandelbrot();
-            highp float color = float(iter) / float(maxIter);
-            gl_FragColor = vec4(color, color, color, 1.0);
-        }
-    `;
-
-    const shaderProgram = createShaderProgram(gl, vertexShaderSource, fragmentShaderSource);
+    const shaderProgram = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
     if (!shaderProgram) {
         return;
     }
@@ -107,19 +178,21 @@ function main() {
         return;
     }
 
-    var dim = 2;
-    // prettier-ignore
-    const vertices = [
-        1, 1, 1, -1, -1, 1,
-        -1, -1, 1, -1, -1, 1
-    ];
+    const pos = new UniformValue(gl, shaderProgram, 'pos', gl.uniform2f);
+    const zoom = new UniformValue(gl, shaderProgram, 'zoom', gl.uniform1f);
+    const iterLimit = new UniformValue(gl, shaderProgram, 'iterLimit', gl.uniform1i);
 
-    // draw rectangle
     const vertexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(VERTCIES), gl.STATIC_DRAW);
     gl.vertexAttribPointer(vertexPosition, 2, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, vertices.length / dim);
+    render(gl);
+
+    pos.set(-0.5, 0);
+    zoom.set(2);
+    iterLimit.set(50);
+
+    attachCanvasEventListeners(canvas, zoom, pos);
 }
 
 main();
