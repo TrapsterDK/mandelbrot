@@ -53,14 +53,38 @@ function main() {
 
     const vertexShaderSource = `
         attribute vec2 aVertexPosition;
+        varying vec2 vPos;
+
         void main() {
             gl_Position = vec4(aVertexPosition, 0.0, 1.0);
+            vPos = aVertexPosition;
         }
     `;
 
     const fragmentShaderSource = `
+        varying highp vec2 vPos;
+        const int maxIter = 50;
+
+        int mandelbrot() {
+            highp float x = 0.0;
+            highp float y = 0.0;
+            highp float x2 = 0.0;
+            highp float y2 = 0.0;
+
+            for (int i = 0; i < maxIter; i++) {
+                if (x * x + y * y > 4.0) return i;
+                y = 2.0 * x * y + vPos.y;
+                x = x2 - y2 + vPos.x;
+                x2 = x * x;
+                y2 = y * y;
+            }
+            return maxIter;
+        }
+
         void main() {
-            gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+            int iter = mandelbrot();
+            highp float color = float(iter) / float(maxIter);
+            gl_FragColor = vec4(color, color, color, 1.0);
         }
     `;
 
