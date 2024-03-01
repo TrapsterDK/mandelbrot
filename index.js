@@ -9,13 +9,13 @@ const MAX_ITER = 1500;
 const SCROLL_MULTIPLIER = 0.2;
 
 const VERTEX_SHADER = `
-attribute vec2 aVertexPosition;
+attribute vec2 vertexPosition;
 
 varying vec2 vPos;
 
 void main() {
-    gl_Position = vec4(aVertexPosition, 0.0, 1.0);
-    vPos = aVertexPosition;
+    gl_Position = vec4(vertexPosition, 0.0, 1.0);
+    vPos = vertexPosition;
 }
 `;
 
@@ -83,47 +83,67 @@ function createProgram(gl, vertexShaderSource, fragmentShaderSource) {
     return program;
 }
 
-function attachCanvasEventListeners(canvas, zoom, pos) {
-    canvas.addEventListener('wheel', (event) => {
-        event.preventDefault();
-        let rect = event.target.getBoundingClientRect();
-        let [posX, posY] = pos.get();
-        let [mouseX, mouseY] = [event.clientX - rect.left, event.clientY - rect.top];
-        let [cursorWorldX, cursorWorldY] = [
-            posX + 2 * (mouseX / canvas.width - 0.5) * zoom.get()[0],
-            posY + 2 * (0.5 - mouseY / canvas.height) * zoom.get()[0],
-        ];
-        zoom.set(zoom.get()[0] * (1 + Math.sign(event.deltaY) * SCROLL_MULTIPLIER));
-        pos.set(
-            cursorWorldX - 2 * (mouseX / canvas.width - 0.5) * zoom.get()[0],
-            cursorWorldY - 2 * (0.5 - mouseY / canvas.height) * zoom.get()[0]
-        );
-    });
-
-    // drag to pan
+function attachDragEventListeners(gl, canvas, zoom, pos) {
     let isDragging = false;
-    let lastX = 0;
-    let lastY = 0;
+    let lastX;
+    let lastY;
+
     canvas.addEventListener('mousedown', (event) => {
         isDragging = true;
         lastX = event.clientX;
         lastY = event.clientY;
     });
 
-    canvas.addEventListener('mouseup', () => {
+    canvas.addEventListener('mousemove', (event) => {
+        if (!isDragging) return;
+
+        let [x, y] = pos.get();
+        let [zoomValue] = zoom.get();
+
+        let deltaX = event.clientX - lastX;
+        let deltaY = event.clientY - lastY;
+        lastX = event.clientX;
+        lastY = event.clientY;
+
+        pos.set(x - (deltaX / canvas.width) * zoomValue * 2, y + (deltaY / canvas.height) * zoomValue * 2);
+        render(gl);
+    });
+
+    canvas.addEventListener('mouseleave', () => {
         isDragging = false;
     });
 
-    canvas.addEventListener('mousemove', (event) => {
-        if (isDragging) {
-            let dx = event.clientX - lastX;
-            let dy = event.clientY - lastY;
-            lastX = event.clientX;
-            lastY = event.clientY;
-            let [x, y] = pos.get();
-            pos.set(x - (dx / canvas.width) * zoom.get()[0] * 2, y + (dy / canvas.height) * zoom.get()[0] * 2);
-        }
+    canvas.addEventListener('mouseup', () => {
+        isDragging = false;
     });
+}
+
+function attachZoomEventListeners(gl, canvas, zoom, pos) {
+    canvas.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        let rect = event.target.getBoundingClientRect();
+        let [x, y] = pos.get();
+        let [zoomValue] = zoom.get();
+
+        let [mouseX, mouseY] = [event.clientX - rect.left, event.clientY - rect.top];
+        let [worldX, worldY] = [
+            x + 2 * (mouseX / canvas.width - 0.5) * zoomValue,
+            y + 2 * (0.5 - mouseY / canvas.height) * zoomValue,
+        ];
+        zoomValue *= 1 + Math.sign(event.deltaY) * SCROLL_MULTIPLIER;
+
+        zoom.set(zoomValue);
+        pos.set(
+            worldX - 2 * (mouseX / canvas.width - 0.5) * zoomValue,
+            worldY - 2 * (0.5 - mouseY / canvas.height) * zoomValue
+        );
+        render(gl);
+    });
+}
+
+function attachCanvasEventListeners(gl, canvas, zoom, pos) {
+    attachDragEventListeners(gl, canvas, zoom, pos);
+    attachZoomEventListeners(gl, canvas, zoom, pos);
 }
 
 function render(gl) {
@@ -131,7 +151,7 @@ function render(gl) {
 }
 
 class UniformValue {
-    constructor(gl, program, name, fn_set = null) {
+    constructor(gl, program, name, fn_set, ...values) {
         this.gl = gl;
         this.fn_set = fn_set;
         this.location = gl.getUniformLocation(program, name);
@@ -139,12 +159,13 @@ class UniformValue {
         if (this.location === null || gl.getError() !== gl.NO_ERROR) {
             throw new Error(`An error occurred getting the location of the uniform ${name}`);
         }
+
+        this.set(...values);
     }
 
     set(...values) {
         this.values = values;
         this.fn_set.apply(this.gl, [this.location, ...values]);
-        render(this.gl);
     }
 
     get() {
@@ -160,8 +181,6 @@ function main() {
         return;
     }
 
-    //const context = canvas.getContext('webgpu');
-
     const gl = canvas.getContext('webgl');
 
     if (!gl) {
@@ -169,14 +188,14 @@ function main() {
         return;
     }
 
-    const shaderProgram = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
-    if (!shaderProgram) {
+    const program = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
+    if (!program) {
         return;
     }
 
-    gl.useProgram(shaderProgram);
+    gl.useProgram(program);
 
-    const vertexPosition = gl.getAttribLocation(shaderProgram, 'aVertexPosition');
+    const vertexPosition = gl.getAttribLocation(program, 'vertexPosition');
     if (vertexPosition === -1) {
         console.error('An error occurred getting the vertexPosition attribute');
         return;
@@ -188,9 +207,9 @@ function main() {
         return;
     }
 
-    const pos = new UniformValue(gl, shaderProgram, 'pos', gl.uniform2f);
-    const zoom = new UniformValue(gl, shaderProgram, 'zoom', gl.uniform1f);
-    const iterLimit = new UniformValue(gl, shaderProgram, 'iterLimit', gl.uniform1i);
+    const pos = new UniformValue(gl, program, 'pos', gl.uniform2f, -0.5, 0);
+    const zoom = new UniformValue(gl, program, 'zoom', gl.uniform1f, 2);
+    const iterLimit = new UniformValue(gl, program, 'iterLimit', gl.uniform1i, 100);
 
     const vertexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
@@ -198,11 +217,7 @@ function main() {
     gl.vertexAttribPointer(vertexPosition, 2, gl.FLOAT, false, 0, 0);
     render(gl);
 
-    pos.set(-0.5, 0);
-    zoom.set(2);
-    iterLimit.set(100);
-
-    attachCanvasEventListeners(canvas, zoom, pos);
+    attachCanvasEventListeners(gl, canvas, zoom, pos);
 }
 
 main();
