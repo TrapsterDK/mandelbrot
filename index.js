@@ -6,7 +6,7 @@ const VERTCIES = [
 const DIMENSION_COUNT = 2;
 const MIN_ITER = 50;
 const MAX_ITER = 1500;
-const SCROLL_MULTIPLIER = 0.1;
+const SCROLL_MULTIPLIER = 0.2;
 
 const VERTEX_SHADER = `
 attribute vec2 aVertexPosition;
@@ -86,8 +86,18 @@ function createProgram(gl, vertexShaderSource, fragmentShaderSource) {
 function attachCanvasEventListeners(canvas, zoom, pos) {
     canvas.addEventListener('wheel', (event) => {
         event.preventDefault();
-        let multiplier = 1 + (0 < event.deltaY ? SCROLL_MULTIPLIER : -SCROLL_MULTIPLIER);
-        zoom.set(zoom.get()[0] * multiplier);
+        let rect = event.target.getBoundingClientRect();
+        let [posX, posY] = pos.get();
+        let [mouseX, mouseY] = [event.clientX - rect.left, event.clientY - rect.top];
+        let [cursorWorldX, cursorWorldY] = [
+            posX + 2 * (mouseX / canvas.width - 0.5) * zoom.get()[0],
+            posY + 2 * (0.5 - mouseY / canvas.height) * zoom.get()[0],
+        ];
+        zoom.set(zoom.get()[0] * (1 + Math.sign(event.deltaY) * SCROLL_MULTIPLIER));
+        pos.set(
+            cursorWorldX - 2 * (mouseX / canvas.width - 0.5) * zoom.get()[0],
+            cursorWorldY - 2 * (0.5 - mouseY / canvas.height) * zoom.get()[0]
+        );
     });
 
     // drag to pan
@@ -111,7 +121,7 @@ function attachCanvasEventListeners(canvas, zoom, pos) {
             lastX = event.clientX;
             lastY = event.clientY;
             let [x, y] = pos.get();
-            pos.set(x - (dx / canvas.width) * zoom.get()[0], y + (dy / canvas.height) * zoom.get()[0]);
+            pos.set(x - (dx / canvas.width) * zoom.get()[0] * 2, y + (dy / canvas.height) * zoom.get()[0] * 2);
         }
     });
 }
@@ -190,7 +200,7 @@ function main() {
 
     pos.set(-0.5, 0);
     zoom.set(2);
-    iterLimit.set(50);
+    iterLimit.set(100);
 
     attachCanvasEventListeners(canvas, zoom, pos);
 }
